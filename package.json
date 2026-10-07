@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "coreutils",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "architecture": "svm64",
   "summary": "basic file, text, and shell utilities",
   "details": "Essential Swiftix command-line utilities for the base userland.",

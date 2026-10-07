@@ -2,61 +2,102 @@ package main
 
 import "fmt"
 import "os"
-import "strconv"
-import "swiftix/userland"
+import "strings"
+import "swiftix/internal/cli"
 
-func usage() {
-	fmt.Println("fold: usage: fold [-w width] [file...]")
-	os.Exit(2)
+const usage = "Usage: fold [OPTION]... [FILE]...\nWrap input lines in each FILE, writing to standard output.\n\nWith no FILE, or when FILE is -, read standard input.\n\n  -b, --bytes         count bytes rather than characters\n  -s, --spaces        break at spaces\n  -w, --width=WIDTH   use WIDTH columns instead of 80\n  -WIDTH              same as -w WIDTH\n      --help          display this help and exit\n"
+
+// charBoundary moves offset back to the nearest character boundary of line so
+// a row never ends inside a UTF-8 sequence.
+func charBoundary(line string, offset int) int {
+	for offset > 0 && offset < len(line) && line[offset] >= 128 && line[offset] < 192 {
+		offset--
+	}
+	return offset
 }
 
-func runeWidth(value int) int {
-	if value >= 240 {
-		return 4
+// foldLine wraps one over-long line. With spaces set, a row ends after its last
+// blank when it has one.
+func foldLine(line string, width int, spaces bool, bytes bool) string {
+	if bytes || cli.IsASCII(line) {
+		rows := ""
+		for len(line) > width {
+			cut := width
+			if spaces {
+				blank := strings.LastIndex(line[:width], " ")
+				if blank >= 0 {
+					cut = blank + 1
+				}
+			}
+			if bytes {
+				cut = charBoundary(line, cut)
+				if cut == 0 {
+					cut = width
+				}
+			}
+			rows = rows + line[:cut] + "\n"
+			line = line[cut:]
+		}
+		return rows + line
 	}
-	if value >= 224 {
-		return 3
+	characters := strings.Split(line, "")
+	rows := ""
+	start := 0
+	for len(characters)-start > width {
+		cut := width
+		if spaces {
+			for position := width - 1; position >= 0; position-- {
+				if characters[start+position] == " " {
+					cut = position + 1
+					break
+				}
+			}
+		}
+		rows = rows + strings.Join(characters[start:start+cut], "") + "\n"
+		start = start + cut
 	}
-	if value >= 192 {
-		return 2
-	}
-	return 1
+	return rows + strings.Join(characters[start:], "")
 }
 
 func main() {
+	flags, values, operands := cli.ParseOptions("fold", usage, os.Args[1:], "bsw:", "bytes=b spaces=s width=w", cli.ModeCount, 1)
 	width := 80
-	first := 1
-	if len(os.Args) >= 3 && (os.Args[1] == "-w" || os.Args[1] == "--width") {
-		value, err := strconv.Atoi(os.Args[2])
-		if err != nil || value <= 0 {
-			usage()
+	spaces := false
+	bytes := false
+	for index := 0; index < len(flags); index++ {
+		flag := flags[index]
+		if flag == "b" {
+			bytes = true
+		} else if flag == "s" {
+			spaces = true
+		} else {
+			parsed, ok := cli.ParseCount(values[index])
+			if !ok || parsed == 0 {
+				cli.Fail("fold", "invalid number of columns: '"+values[index]+"'", 1)
+			}
+			width = parsed
 		}
-		width = value
-		first = 3
 	}
 
-	data, status := userland.ReadInput("fold", os.Args[first:])
-	column := 0
-	for index := 0; index < len(data); {
-		if data[index] == 10 {
-			fmt.Print("\n")
-			column = 0
-			index++
+	data, status := cli.ReadAll("fold", operands)
+	terminated := strings.HasSuffix(data, "\n")
+	lines := cli.SplitLines(data)
+	ascii := bytes || cli.IsASCII(data)
+	// Only an over-long line is rebuilt; the others pass through as they are.
+	for index := 0; index < len(lines); index++ {
+		line := lines[index]
+		if len(line) <= width {
 			continue
 		}
-		if column == width {
-			fmt.Print("\n")
-			column = 0
+		if !ascii && cli.CharCount(line) <= width {
+			continue
 		}
-		count := runeWidth(data[index])
-		if index+count > len(data) {
-			count = 1
-		}
-		fmt.Print(data[index:index+count])
-		index = index + count
-		column++
+		lines[index] = foldLine(line, width, spaces, bytes)
 	}
-	if status != 0 {
-		os.Exit(status)
+	text := strings.Join(lines, "\n")
+	if terminated {
+		text = text + "\n"
 	}
+	fmt.Print(text)
+	os.Exit(status)
 }

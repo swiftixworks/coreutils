@@ -2,56 +2,40 @@ package main
 
 import "fmt"
 import "os"
-import "swiftix/userland"
+import "strings"
+import "swiftix/internal/cli"
 
-func splitLines(data string) []string {
-	lines := []string{}
-	start := 0
-	for index := 0; index < len(data); index++ {
-		if data[index] == 10 {
-			lines = append(lines, data[start:index])
-			start = index + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	return lines
-}
+const usage = "Usage: rev [FILE]...\nReverse the characters of every line of each FILE.\n\nWith no FILE, or when FILE is -, read standard input.\n\n      --help   display this help and exit\n"
 
-func reverse(line string) {
-	starts := []int{}
-	for index := 0; index < len(line); {
-		starts = append(starts, index)
-		value := line[index]
-		width := 1
-		if value >= 240 {
-			width = 4
-		} else if value >= 224 {
-			width = 3
-		} else if value >= 192 {
-			width = 2
-		}
-		index = index + width
+func reverse(line string) string {
+	characters := strings.Split(line, "")
+	count := len(characters)
+	for index := 0; index < count/2; index++ {
+		other := count - 1 - index
+		character := characters[index]
+		characters[index] = characters[other]
+		characters[other] = character
 	}
-	for index := len(starts); index > 0; index-- {
-		start := starts[index-1]
-		limit := len(line)
-		if index < len(starts) {
-			limit = starts[index]
-		}
-		fmt.Print(line[start:limit])
-	}
-	fmt.Print("\n")
+	return strings.Join(characters, "")
 }
 
 func main() {
-	data, status := userland.ReadInput("rev", os.Args[1:])
-	lines := splitLines(data)
+	flags, values, operands := cli.ParseOptions("rev", usage, os.Args[1:], "", "", cli.ModePlain, 1)
+	if len(flags) != len(values) {
+		os.Exit(1)
+	}
+	data, status := cli.ReadAll("rev", operands)
+	terminated := strings.HasSuffix(data, "\n")
+	lines := cli.SplitLines(data)
 	for index := 0; index < len(lines); index++ {
-		reverse(lines[index])
+		if len(lines[index]) > 1 {
+			lines[index] = reverse(lines[index])
+		}
 	}
-	if status != 0 {
-		os.Exit(status)
+	text := strings.Join(lines, "\n")
+	if terminated {
+		text = text + "\n"
 	}
+	fmt.Print(text)
+	os.Exit(status)
 }

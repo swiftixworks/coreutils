@@ -2,96 +2,103 @@ package main
 
 import "fmt"
 import "os"
-import "swiftix/userland"
+import "strconv"
+import "strings"
+import "swiftix/internal/cli"
 
-func usage() {
-	fmt.Println("comm: usage: comm [-123] file1 file2")
-	os.Exit(2)
-}
-
-func splitLines(data string) []string {
-	lines := []string{}
-	start := 0
-	for index := 0; index < len(data); index++ {
-		if data[index] == 10 {
-			lines = append(lines, data[start:index])
-			start = index + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	return lines
-}
-
-func hasOption(options string, value int) bool {
-	for index := 1; index < len(options); index++ {
-		if options[index] == value {
-			return true
-		}
-		if options[index] != 49 && options[index] != 50 && options[index] != 51 {
-			usage()
-		}
-	}
-	return false
-}
+const usage = "Usage: comm [OPTION]... FILE1 FILE2\nCompare sorted files FILE1 and FILE2 line by line.\n\nWhen FILE1 or FILE2 (not both) is -, read standard input.\n\nWith no options, produce three-column output. Column one contains\nlines unique to FILE1, column two contains lines unique to FILE2,\nand column three contains lines common to both files.\n\n  -1                         suppress column 1 (lines unique to FILE1)\n  -2                         suppress column 2 (lines unique to FILE2)\n  -3                         suppress column 3 (lines that appear in both files)\n      --output-delimiter=STR separate columns with STR\n      --total                output a summary\n      --help                 display this help and exit\n"
 
 func main() {
-	first := 1
-	hide1 := false
-	hide2 := false
-	hide3 := false
-	for first < len(os.Args) && len(os.Args[first]) > 1 && os.Args[first][0] == 45 {
-		if hasOption(os.Args[first], 49) {
-			hide1 = true
+	flags, values, operands := cli.ParseOptions("comm", usage, os.Args[1:], "123d:t", "output-delimiter=d total=t", cli.ModePlain, 1)
+	showFirst := true
+	showSecond := true
+	showBoth := true
+	delimiter := "\t"
+	total := false
+	for index := 0; index < len(flags); index++ {
+		flag := flags[index]
+		if flag == "1" {
+			showFirst = false
+		} else if flag == "2" {
+			showSecond = false
+		} else if flag == "3" {
+			showBoth = false
+		} else if flag == "d" {
+			delimiter = values[index]
+		} else {
+			total = true
 		}
-		if hasOption(os.Args[first], 50) {
-			hide2 = true
-		}
-		if hasOption(os.Args[first], 51) {
-			hide3 = true
-		}
-		first++
 	}
-	if len(os.Args)-first != 2 {
-		usage()
+	if len(operands) < 2 {
+		if len(operands) == 0 {
+			cli.FailUsage("comm", "missing operand", 1)
+		}
+		cli.FailUsage("comm", "missing operand after '"+operands[0]+"'", 1)
 	}
-
-	leftData, leftStatus := userland.ReadInput("comm", []string{os.Args[first]})
-	rightData, rightStatus := userland.ReadInput("comm", []string{os.Args[first+1]})
-	if leftStatus != 0 || rightStatus != 0 {
+	if len(operands) > 2 {
+		cli.FailUsage("comm", "extra operand '"+operands[2]+"'", 1)
+	}
+	firstData, firstStatus := cli.ReadFile("comm", operands[0])
+	secondData, secondStatus := cli.ReadFile("comm", operands[1])
+	if firstStatus != 0 || secondStatus != 0 {
 		os.Exit(1)
 	}
-	left := splitLines(leftData)
-	right := splitLines(rightData)
-	leftIndex := 0
-	rightIndex := 0
-	for leftIndex < len(left) || rightIndex < len(right) {
-		if rightIndex >= len(right) || (leftIndex < len(left) && left[leftIndex] < right[rightIndex]) {
-			if !hide1 {
-				fmt.Println(left[leftIndex])
+	first := cli.SplitLines(firstData)
+	second := cli.SplitLines(secondData)
+
+	secondPrefix := ""
+	if showFirst {
+		secondPrefix = delimiter
+	}
+	bothPrefix := secondPrefix
+	if showSecond {
+		bothPrefix = bothPrefix + delimiter
+	}
+	left := 0
+	right := 0
+	onlyFirst := 0
+	onlySecond := 0
+	both := 0
+	rows := []string{}
+	for left < len(first) || right < len(second) {
+		if right >= len(second) {
+			onlyFirst++
+			if showFirst {
+				rows = append(rows, first[left])
 			}
-			leftIndex++
-		} else if leftIndex >= len(left) || right[rightIndex] < left[leftIndex] {
-			if !hide2 {
-				if !hide1 {
-					fmt.Print("\t")
-				}
-				fmt.Println(right[rightIndex])
+			left++
+		} else if left >= len(first) {
+			onlySecond++
+			if showSecond {
+				rows = append(rows, secondPrefix+second[right])
 			}
-			rightIndex++
+			right++
+		} else if first[left] == second[right] {
+			both++
+			if showBoth {
+				rows = append(rows, bothPrefix+first[left])
+			}
+			left++
+			right++
+		} else if first[left] < second[right] {
+			onlyFirst++
+			if showFirst {
+				rows = append(rows, first[left])
+			}
+			left++
 		} else {
-			if !hide3 {
-				if !hide1 {
-					fmt.Print("\t")
-				}
-				if !hide2 {
-					fmt.Print("\t")
-				}
-				fmt.Println(left[leftIndex])
+			onlySecond++
+			if showSecond {
+				rows = append(rows, secondPrefix+second[right])
 			}
-			leftIndex++
-			rightIndex++
+			right++
 		}
 	}
+	if total {
+		rows = append(rows, strconv.Itoa(onlyFirst)+delimiter+strconv.Itoa(onlySecond)+delimiter+strconv.Itoa(both)+delimiter+"total")
+	}
+	if len(rows) > 0 {
+		fmt.Print(strings.Join(rows, "\n") + "\n")
+	}
+	os.Exit(0)
 }
